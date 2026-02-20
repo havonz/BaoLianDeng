@@ -6,19 +6,21 @@ import SwiftUI
 
 struct ConfigEditorView: View {
     @State private var configText: String = ""
+    @State private var validationErrors: [YAMLError] = []
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var isSaving = false
     @State private var showSaved = false
+    @State private var showErrors = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 configHeader
-                TextEditor(text: $configText)
-                    .font(.system(.caption, design: .monospaced))
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
+                YAMLEditor(text: $configText, validationErrors: $validationErrors)
+                if !validationErrors.isEmpty {
+                    errorBar
+                }
             }
             .navigationTitle("Config")
             .toolbar {
@@ -38,12 +40,18 @@ struct ConfigEditorView: View {
             } message: {
                 Text(errorMessage)
             }
+            .sheet(isPresented: $showErrors) {
+                errorListSheet
+            }
             .overlay {
                 if showSaved {
                     savedToast
                 }
             }
-            .onAppear { loadConfig() }
+            .onAppear {
+                loadConfig()
+                validationErrors = YAMLValidator.validate(configText)
+            }
         }
     }
 
@@ -60,6 +68,48 @@ struct ConfigEditorView: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
+    }
+
+    private var errorBar: some View {
+        Button(action: { showErrors = true }) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
+                Text("\(validationErrors.count) issue\(validationErrors.count == 1 ? "" : "s")")
+                    .font(.caption.weight(.medium))
+                Spacer()
+                Image(systemName: "chevron.up")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var errorListSheet: some View {
+        NavigationStack {
+            List(validationErrors) { error in
+                HStack(alignment: .top, spacing: 10) {
+                    Text("L\(error.line)")
+                        .font(.caption.monospaced().weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .frame(width: 40, alignment: .trailing)
+                    Text(error.message)
+                        .font(.caption)
+                }
+            }
+            .navigationTitle("YAML Issues")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { showErrors = false }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 
     private var savedToast: some View {
@@ -105,6 +155,7 @@ struct ConfigEditorView: View {
 
     private func resetConfig() {
         configText = ConfigManager.shared.defaultConfig()
+        validationErrors = YAMLValidator.validate(configText)
     }
 }
 
