@@ -11,33 +11,59 @@ struct TrafficView: View {
     @State private var timer: Timer?
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Label(formatBytes(uploadBytes), systemImage: "arrow.up.circle.fill")
-                    .foregroundStyle(.blue)
-                    .font(.subheadline)
-                Text("Upload")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+        NavigationStack {
+            List {
+                Section("Current Session") {
+                    HStack {
+                        Label("Upload", systemImage: "arrow.up.circle.fill")
+                            .foregroundStyle(.blue)
+                        Spacer()
+                        Text(formatBytes(uploadBytes))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
 
-            Spacer()
+                    HStack {
+                        Label("Download", systemImage: "arrow.down.circle.fill")
+                            .foregroundStyle(.green)
+                        Spacer()
+                        Text(formatBytes(downloadBytes))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
 
-            VStack(alignment: .trailing, spacing: 4) {
-                Label(formatBytes(downloadBytes), systemImage: "arrow.down.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.subheadline)
-                Text("Download")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    HStack {
+                        Label("Total", systemImage: "arrow.up.arrow.down.circle.fill")
+                            .foregroundStyle(.purple)
+                        Spacer()
+                        Text(formatBytes(uploadBytes + downloadBytes))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+
+                Section("Status") {
+                    HStack {
+                        Text("Connection")
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(vpnManager.isConnected ? .green : .gray)
+                                .frame(width: 8, height: 8)
+                            Text(vpnManager.isConnected ? "Active" : "Inactive")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
+            .navigationTitle("Data")
+            .onAppear { startPolling() }
+            .onDisappear { stopPolling() }
         }
-        .padding(.vertical, 4)
-        .onAppear { startPolling() }
-        .onDisappear { stopPolling() }
     }
 
     private func startPolling() {
+        fetchTraffic()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             fetchTraffic()
         }
@@ -72,4 +98,9 @@ struct TrafficView: View {
         formatter.countStyle = .binary
         return formatter.string(fromByteCount: bytes)
     }
+}
+
+#Preview {
+    TrafficView()
+        .environmentObject(VPNManager.shared)
 }

@@ -28,7 +28,6 @@ struct AboutView: View {
             Section("Information") {
                 InfoRow(title: "Version", value: Bundle.main.appVersion)
                 InfoRow(title: "Build", value: Bundle.main.buildNumber)
-                InfoRow(title: "Mihomo Core", value: "Loading...")
             }
 
             Section("Links") {
@@ -41,7 +40,7 @@ struct AboutView: View {
             }
 
             Section("License") {
-                Text("This app is open source and distributed under the GPL-3.0 license.")
+                Text("This app is open source and distributed under the MIT License.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -10,8 +10,28 @@ struct BaoLianDengApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MainView()
-                .environmentObject(vpnManager)
+            TabView {
+                HomeView()
+                    .tabItem {
+                        Label("Home", systemImage: "house.fill")
+                    }
+
+                ConfigEditorView()
+                    .tabItem {
+                        Label("Config", systemImage: "doc.text.fill")
+                    }
+
+                TrafficView()
+                    .tabItem {
+                        Label("Data", systemImage: "chart.bar.fill")
+                    }
+
+                SettingsView()
+                    .tabItem {
+                        Label("Settings", systemImage: "gearshape.fill")
+                    }
+            }
+            .environmentObject(vpnManager)
         }
     }
 }

@@ -5,37 +5,31 @@
 import SwiftUI
 
 struct ConfigEditorView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var configText: String = ""
     @State private var showError = false
     @State private var errorMessage = ""
     @State private var isSaving = false
+    @State private var showSaved = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 configHeader
                 TextEditor(text: $configText)
-                    .font(.system(.body, design: .monospaced))
+                    .font(.system(.caption, design: .monospaced))
                     .autocapitalization(.none)
                     .disableAutocorrection(true)
             }
-            .navigationTitle("Configuration")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Config")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Save") { saveConfig() }
                         .disabled(isSaving)
                 }
                 ToolbarItem(placement: .bottomBar) {
                     HStack {
-                        Button("Reset to Default") { resetConfig() }
-                            .foregroundStyle(.red)
+                        Button("Reset Default", role: .destructive) { resetConfig() }
                         Spacer()
-                        Button("Import from URL") { /* TODO: URL import */ }
                     }
                 }
             }
@@ -43,6 +37,11 @@ struct ConfigEditorView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorMessage)
+            }
+            .overlay {
+                if showSaved {
+                    savedToast
+                }
             }
             .onAppear { loadConfig() }
         }
@@ -63,6 +62,20 @@ struct ConfigEditorView: View {
         .background(.ultraThinMaterial)
     }
 
+    private var savedToast: some View {
+        VStack {
+            Spacer()
+            Text("Saved")
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(.thinMaterial)
+                .clipShape(Capsule())
+                .padding(.bottom, 80)
+        }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
     private func loadConfig() {
         if ConfigManager.shared.configExists() {
             do {
@@ -79,7 +92,10 @@ struct ConfigEditorView: View {
         isSaving = true
         do {
             try ConfigManager.shared.saveConfig(configText)
-            dismiss()
+            withAnimation { showSaved = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                withAnimation { showSaved = false }
+            }
         } catch {
             errorMessage = error.localizedDescription
             showError = true
