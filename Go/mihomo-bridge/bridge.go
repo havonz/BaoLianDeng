@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Max Lv <max.c.lv@gmail.com>
+//
+// Licensed under the MIT License. See LICENSE file in the project root for details.
+
 // Package bridge provides a gomobile-compatible interface to the Mihomo proxy core.
 // It exposes a minimal API for starting/stopping the proxy engine from iOS.
 package bridge
