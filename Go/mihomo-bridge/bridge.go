@@ -3,26 +3,32 @@
 package bridge
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sync"
 
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/config"
 	"github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/hub"
 	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
 )
 
 var (
-	mu        sync.Mutex
-	running   bool
-	cancelCtx context.CancelFunc
+	mu      sync.Mutex
+	running bool
+	tunFdGlobal int32 = -1
 )
+
+func init() {
+	// Aggressive GC to stay within iOS Network Extension's ~15MB memory limit.
+	// Go runtime itself takes ~5MB, leaving ~10MB for the app.
+	runtime.SetGCPercent(10)
+}
 
 // SetHomeDir sets the Mihomo home directory for config and data files.
 func SetHomeDir(path string) {
@@ -36,8 +42,20 @@ func SetConfig(yamlContent string) error {
 	return os.WriteFile(configPath, []byte(yamlContent), 0644)
 }
 
+// SetTUNFd stores the TUN file descriptor provided by iOS NEPacketTunnelProvider.
+// Call this before StartProxy. The fd is injected into the config so Mihomo's
+// sing-tun layer reads/writes packets through the system VPN tunnel.
+func SetTUNFd(fd int32) error {
+	if fd < 0 {
+		return fmt.Errorf("invalid file descriptor: %d", fd)
+	}
+	mu.Lock()
+	tunFdGlobal = fd
+	mu.Unlock()
+	return nil
+}
+
 // StartProxy starts the Mihomo proxy engine with the configuration in the home directory.
-// It returns an error if the engine is already running or if configuration parsing fails.
 func StartProxy() error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -56,14 +74,25 @@ func StartProxy() error {
 	// Disable process finding on iOS (not supported)
 	process.EnableFindProcess = false
 
-	// Parse configuration
 	cfg, err := executor.Parse()
 	if err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Apply configuration and start the engine
+	// Inject TUN file descriptor from iOS if available.
+	// Mihomo's sing-tun uses this fd instead of creating its own TUN device.
+	if tunFdGlobal >= 0 {
+		cfg.Tun.Enable = true
+		cfg.Tun.FileDescriptor = int(tunFdGlobal)
+		cfg.Tun.AutoRoute = false
+		cfg.Tun.AutoDetectInterface = false
+	}
+
 	executor.ApplyConfig(cfg, true)
+
+	// Free memory after setup
+	runtime.GC()
+	debug.FreeOSMemory()
 
 	running = true
 	log.Infoln("Mihomo proxy engine started")
@@ -98,10 +127,18 @@ func StartWithExternalController(addr, secret string) error {
 	cfg.General.ExternalController = addr
 	cfg.General.Secret = secret
 
+	// Inject TUN fd
+	if tunFdGlobal >= 0 {
+		cfg.Tun.Enable = true
+		cfg.Tun.FileDescriptor = int(tunFdGlobal)
+		cfg.Tun.AutoRoute = false
+		cfg.Tun.AutoDetectInterface = false
+	}
+
 	executor.ApplyConfig(cfg, true)
 
-	// Start the REST API
-	go hub.Parse()
+	runtime.GC()
+	debug.FreeOSMemory()
 
 	running = true
 	log.Infoln("Mihomo proxy engine started with external controller at %s", addr)
@@ -109,6 +146,8 @@ func StartWithExternalController(addr, secret string) error {
 }
 
 // StopProxy stops the Mihomo proxy engine gracefully.
+// Uses executor.Shutdown() which properly cleans up listeners, TUN device,
+// DNS resolver state, and fake-ip pool persistence.
 func StopProxy() {
 	mu.Lock()
 	defer mu.Unlock()
@@ -117,16 +156,14 @@ func StopProxy() {
 		return
 	}
 
-	// Close all tunnel connections
-	tunnel.DefaultManager.ResetStatistic()
-
-	if cancelCtx != nil {
-		cancelCtx()
-		cancelCtx = nil
-	}
+	executor.Shutdown()
 
 	running = false
+	tunFdGlobal = -1
 	log.Infoln("Mihomo proxy engine stopped")
+
+	runtime.GC()
+	debug.FreeOSMemory()
 }
 
 // IsRunning returns whether the proxy engine is currently active.
@@ -134,16 +171,6 @@ func IsRunning() bool {
 	mu.Lock()
 	defer mu.Unlock()
 	return running
-}
-
-// SetTUNFileDescriptor sets the TUN device file descriptor provided by iOS NetworkExtension.
-// This allows Mihomo to read/write packets from the VPN tunnel.
-func SetTUNFileDescriptor(fd int32) error {
-	if fd < 0 {
-		return fmt.Errorf("invalid file descriptor: %d", fd)
-	}
-	os.Setenv("MIHOMO_TUN_FD", fmt.Sprintf("%d", fd))
-	return nil
 }
 
 // UpdateLogLevel updates the logging level (debug, info, warning, error, silent).
@@ -164,18 +191,7 @@ func ReadConfig() (string, error) {
 
 // ValidateConfig validates a YAML configuration string without applying it.
 func ValidateConfig(yamlContent string) error {
-	tmpDir, err := os.MkdirTemp("", "mihomo-validate")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-
-	tmpFile := filepath.Join(tmpDir, "config.yaml")
-	if err := os.WriteFile(tmpFile, []byte(yamlContent), 0644); err != nil {
-		return err
-	}
-
-	_, err = config.Parse([]byte(yamlContent))
+	_, err := config.Parse([]byte(yamlContent))
 	return err
 }
 
@@ -183,6 +199,13 @@ func ValidateConfig(yamlContent string) error {
 func GetTrafficStats() (up, down int64) {
 	snapshot := tunnel.DefaultManager.Snapshot()
 	return snapshot.UploadTotal, snapshot.DownloadTotal
+}
+
+// ForceGC triggers garbage collection and returns memory to the OS.
+// Call periodically from iOS to manage the extension's memory budget.
+func ForceGC() {
+	runtime.GC()
+	debug.FreeOSMemory()
 }
 
 // Version returns the Mihomo core version.

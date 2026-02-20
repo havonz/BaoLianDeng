@@ -3,6 +3,7 @@ import MihomoCore
 
 class PacketTunnelProvider: NEPacketTunnelProvider {
     private var proxyStarted = false
+    private var gcTimer: DispatchSourceTimer?
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         setupLogging()
@@ -30,12 +31,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
 
-            // Pass the TUN file descriptor to Go
+            // Pass the TUN file descriptor to Go core
             if let fd = self?.tunnelFileDescriptor {
-                var err: NSError?
-                BridgeSetTUNFd(Int32(fd), &err)
-                if let err = err {
-                    NSLog("[BaoLianDeng] Failed to set TUN fd: \(err)")
+                var fdErr: NSError?
+                BridgeSetTUNFd(Int32(fd), &fdErr)
+                if let fdErr = fdErr {
+                    NSLog("[BaoLianDeng] Failed to set TUN fd: \(fdErr)")
+                    completionHandler(fdErr)
+                    return
                 }
             }
 
@@ -48,11 +51,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             self?.proxyStarted = true
+            self?.startMemoryManagement()
             completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        stopMemoryManagement()
         if proxyStarted {
             BridgeStopProxy()
             proxyStarted = false
@@ -97,24 +102,41 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func createTunnelSettings() -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "254.1.1.1")
 
-        // IPv4 settings
+        // IPv4 - route all traffic through the tunnel
         let ipv4 = NEIPv4Settings(
             addresses: [AppConstants.tunAddress],
             subnetMasks: [AppConstants.tunSubnetMask]
         )
-        // Route all traffic through tunnel
         ipv4.includedRoutes = [NEIPv4Route.default()]
         settings.ipv4Settings = ipv4
 
-        // DNS settings - use Mihomo's fake-ip DNS
+        // DNS - point to Mihomo's fake-ip DNS server
         let dns = NEDNSSettings(servers: [AppConstants.tunDNS])
-        dns.matchDomains = [""]  // Match all domains
+        dns.matchDomains = [""]
         settings.dnsSettings = dns
 
-        // MTU
         settings.mtu = NSNumber(value: AppConstants.defaultMTU)
 
         return settings
+    }
+
+    // MARK: - Memory Management
+
+    /// iOS Network Extension has a ~15MB memory limit.
+    /// Periodically trigger Go GC to return memory to the OS.
+    private func startMemoryManagement() {
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 30, repeating: 30)
+        timer.setEventHandler {
+            BridgeForceGC()
+        }
+        timer.resume()
+        gcTimer = timer
+    }
+
+    private func stopMemoryManagement() {
+        gcTimer?.cancel()
+        gcTimer = nil
     }
 
     // MARK: - Helpers
@@ -125,11 +147,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )?.appendingPathComponent("mihomo").path
     }
 
+    /// Find the utun file descriptor created by NEPacketTunnelProvider.
+    /// This fd is passed to the Go core so Mihomo can read/write VPN packets directly.
     private var tunnelFileDescriptor: Int32? {
         var buf = [CChar](repeating: 0, count: Int(IFNAMSIZ))
         for fd: Int32 in 0...1024 {
             var len = socklen_t(buf.count)
-            if getsockopt(fd, 2, 2, &buf, &len) == 0 && String(cString: buf).hasPrefix("utun") {
+            if getsockopt(fd, 2 /* SYSPROTO_CONTROL */, 2 /* UTUN_OPT_IFNAME */, &buf, &len) == 0
+                && String(cString: buf).hasPrefix("utun") {
                 return fd
             }
         }
@@ -141,13 +166,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func handleSwitchMode(_ mode: String) {
-        // Reload config with the new mode by updating the config file
         guard let configDir = configDirectory else { return }
         let configPath = configDir + "/config.yaml"
 
         guard var config = try? String(contentsOfFile: configPath, encoding: .utf8) else { return }
 
-        // Simple mode replacement in YAML
+        // Replace mode value in YAML
         let modes = ["rule", "global", "direct"]
         for m in modes {
             config = config.replacingOccurrences(of: "mode: \(m)", with: "mode: \(mode)")
@@ -155,8 +179,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         try? config.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-        // Restart the engine with new config
+        // Restart the engine with updated config
         BridgeStopProxy()
+
+        // Re-set the TUN fd since StopProxy clears it
+        if let fd = tunnelFileDescriptor {
+            var err: NSError?
+            BridgeSetTUNFd(Int32(fd), &err)
+        }
+
         var err: NSError?
         BridgeStartProxy(&err)
         if let err = err {
