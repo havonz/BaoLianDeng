@@ -1,0 +1,33 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserdata
+*.xcworkspace
+!*.xcodeproj/project.pbxproj
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xccheckout
+*.moved-aside
+
+# Go
+Go/mihomo-bridge/go.sum
+Go/mihomo-bridge/vendor/
+
+# Framework (built from Go source)
+Framework/MihomoCore.xcframework/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# CocoaPods / SPM
+Pods/
+.build/
+
+# Secrets
+*.mobileprovision
+*.p12
+*.cer
